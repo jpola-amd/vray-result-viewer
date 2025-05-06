@@ -289,17 +289,23 @@ class MainWindow(QtWidgets.QMainWindow):
             test_item.setToolTip(f"Status: {test_result.status}\nMetric: {test_result.metric}\nExit Code: {test_result.exit_code}")
             test_item.setData(TreeItemType.TestResult.value, TreeUserRole.Type.value)
             test_item.setData(test_result, TreeUserRole.Data.value)
+            # check the test_result exit code if it is not 0, set the background color to red
+            if test_result.exit_code != 0:
+                test_item.setBackground(QtGui.QBrush(QtGui.QColor(255, 0, 0, 100)))
 
             # check the test_result diff for the render elements
             for name, elements  in test_result.diff.items():
                 n_frames = len(elements)
                 item_name = name if n_frames == 1 else f"{name} (x{n_frames})"
-                # info is just for the first one (could be improved with current status of a slider)
                 render_element = elements[0]
                 render_element_item = QtGui.QStandardItem(item_name)
                 render_element_item.setToolTip(f"Delta Count: {render_element.delta_count}\nStatus: {render_element.status}")
                 render_element_item.setData(TreeItemType.RenderElement.value, TreeUserRole.Type.value)
                 render_element_item.setData(elements, TreeUserRole.Data.value)
+                if render_element.exit_code != 0:
+                    render_element_item.setBackground(QtGui.QBrush(QtGui.QColor(255, 165, 0, 100)))
+                else:
+                    render_element_item.setBackground(QtGui.QBrush(QtGui.QColor(0, 255, 0, 100)))
                 test_item.appendRow(render_element_item)
                     
             directory_item.appendRow(test_item)
