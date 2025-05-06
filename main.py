@@ -147,6 +147,46 @@ class TreeItemType(Enum):
     TestResult = auto()
     RenderElement = auto()
 
+def set_table_model(view, model):
+    view.setModel(model)
+    header = view.horizontalHeader()
+    header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
+
+def create_render_elements_table_model(data : RenderElement):
+        model = QtGui.QStandardItemModel()
+        model.setHorizontalHeaderLabels(["Field", "Value"])
+        model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.name)])
+        model.appendRow([QtGui.QStandardItem("Frame"), QtGui.QStandardItem(str(data.frame))])
+        model.appendRow([QtGui.QStandardItem("Delta Count"), QtGui.QStandardItem(str(data.delta_count))])
+        model.appendRow([QtGui.QStandardItem("Delta File"), QtGui.QStandardItem(str(data.delta_file))])
+        model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
+        model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])        
+        return model
+
+def create_test_result_teable_model(data: TestResult):
+        model = QtGui.QStandardItemModel()
+        model.setHorizontalHeaderLabels(["Field", "Value"])
+        model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.file_name)])
+        model.appendRow([QtGui.QStandardItem("File Path"), QtGui.QStandardItem(str(data.file_path))])
+        model.appendRow([QtGui.QStandardItem("Log File"), QtGui.QStandardItem(str(data.log_file))])
+        model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])
+        model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
+        model.appendRow([QtGui.QStandardItem("Metric"), QtGui.QStandardItem(data.metric)])
+        model.appendRow([QtGui.QStandardItem("Worker Index"), QtGui.QStandardItem(str(data.worker_index))])
+        model.appendRow([QtGui.QStandardItem("Start Time"), QtGui.QStandardItem(data.start_time.strftime("%Y-%m-%d %H:%M:%S"))])
+        model.appendRow([QtGui.QStandardItem("End Time"), QtGui.QStandardItem(data.end_time.strftime("%Y-%m-%d %H:%M:%S"))])
+        model.appendRow([QtGui.QStandardItem("Duration"), QtGui.QStandardItem(str(data.end_time - data.start_time))])
+        return model
+
+def create_pixmap_scaled(file, size):
+        if file:
+            return QtGui.QPixmap(str(file)).scaled(size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+        return None
+
+def setup_label_size_policy(label: QtWidgets.QLabel, size_policy: QtWidgets.QSizePolicy):
+    label.setSizePolicy(size_policy)
+    label.setMinimumSize(10, 10)  # Small minimum size
+    label.setScaledContents(True)
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
@@ -156,6 +196,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setGeometry(100, 100, 800, 600)
         self.ui.setupUi(self)
         self.setWindowTitle("VRay Results Viewer")
+
+        # Set size policies for labels to allow them to shrink
+        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
+        setup_label_size_policy(self.ui.label_resultImage, size_policy)
+        setup_label_size_policy(self.ui.label_diffImage, size_policy)
+        setup_label_size_policy(self.ui.label_referenceImage, size_policy)
+        
+        self.current_frame = 0
+        self.current_render_elements = None
 
         # for filtering the tree view
         self.proxy_model = QtCore.QSortFilterProxyModel(self)
@@ -172,7 +221,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.actionExit.triggered.connect(self.close)
         
         self.ui.treeView_results.clicked.connect(self.on_tree_view_clicked)
-        self.ui.horizontalSlider_frames.valueChanged.connect(self.load_image)
+        self.ui.horizontalSlider_frames.valueChanged.connect(self.on_slider_valueChanged)
         self.load(Path("D:/Vray/hip_output"))
     
     def adjust_status_bar(self, min, max, step, value):
@@ -185,69 +234,65 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(self, "current_render_elements") and self.current_render_elements:
             self.load_image()
         super().resizeEvent(event)
-
-    def create_pixmap_scaled(self, file):
-        pixmap = QtGui.QPixmap(str(file)).scaled(self.ui.label_resultImage.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        return pixmap
     
-    def load_image(self):
-
-        frame = self.ui.horizontalSlider_frames.value()
-        if frame < 0 or frame >= len(self.current_render_elements):
+    def on_slider_valueChanged(self, value: int):
+        self.current_frame = value
+        if not self.current_render_elements:
+            return
+        if self.current_frame < 0 or self.current_frame >= len(self.current_render_elements):
             print("Invalid frame number")
             return
-        render_element = self.current_render_elements[frame]
-        if render_element.run_file:
-            pixmap = self.create_pixmap_scaled(render_element.run_file)
-            print(f"size: {pixmap.size()}")
-            self.ui.label_resultImage.setPixmap(pixmap)
-        if render_element.ref_file:
-            pixmap = self.create_pixmap_scaled(render_element.ref_file)
-            self.ui.label_referenceImage.setPixmap(pixmap)
-        if render_element.delta_file:
-            pixmap = self.create_pixmap_scaled(render_element.delta_file)
-            self.ui.label_diffImage.setPixmap(pixmap)
-    
-    def handle_image_display(self, render_elements: list[RenderElement]):
-        # # Prepare gui for displaying elements
-        # self.ui.label_resultImage.clear()
-        # self.ui.label_referenceImage.clear()
-        # self.ui.label_diffImage.clear()
-        #self.adjust_status_bar(0, 0, 0, 0)
-
-        self.current_frame = render_elements[0].frame
-        self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
-        self.current_render_elements = render_elements
         self.load_image()
-
-    def handle_stats_display(self, render_element: RenderElement):
-        pass
+        self.load_render_elements_info()
     
+    def load_image(self):
+        render_element = self.current_render_elements[self.current_frame]
+        self.ui.label_resultImage.setPixmap(create_pixmap_scaled(render_element.run_file, self.ui.label_resultImage.size()))
+        self.ui.label_referenceImage.setPixmap(create_pixmap_scaled(render_element.run_file, self.ui.label_referenceImage.size()))
+        self.ui.label_diffImage.setPixmap(create_pixmap_scaled(render_element.delta_file, self.ui.label_diffImage.size()))
+    
+    def load_render_elements_info(self):
+        redner_element = self.current_render_elements[self.current_frame]
+        model = create_render_elements_table_model(redner_element)
+        set_table_model(self.ui.tableView_stats, model)
+  
+    def handle_stats_display(self, data: TestResult | RenderElement):
+        if isinstance(data, TestResult):
+            model = create_test_result_teable_model(data)
+        elif isinstance(data, list):
+            model = create_render_elements_table_model(data[self.current_frame])
+        set_table_model(self.ui.tableView_stats, model)
+
+    def handle_image_display(self, render_elements: list[RenderElement]):
+        self.current_render_elements = render_elements
+        self.load_image()    
+
     def on_tree_view_clicked(self, index: QtCore.QModelIndex):
         item = self.proxy_model.mapToSource(index)
         if not item.isValid():
             return
-        
+            
         type = item.data(TreeUserRole.Type.value)
+        self.current_frame = 0
+
         if type == TreeItemType.TestResult.value:
             test_result = item.data(TreeUserRole.Data.value)
             key = next(iter(test_result.diff.keys()))
             print(f"Displaying: {key}")
             render_elements = test_result.diff[key]
             if render_elements:
+                self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
                 self.handle_image_display(render_elements)
-                self.handle_stats_display(render_elements)
+            self.handle_stats_display(test_result)
         elif type == TreeItemType.RenderElement.value:
             render_elements = item.data(TreeUserRole.Data.value)
+            self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
             self.handle_image_display(render_elements)
             self.handle_stats_display(render_elements)
-        else:
-            print("Unknown item clicked")
-            return
 
-    def load_results(self, results_file):
-        print(f"Loading results from {results_file}")
-        with open(results_file, 'r') as file:
+    def load_json_results(self, json_results_file):
+        print(f"Loading results from {json_results_file}")
+        with open(json_results_file, 'r') as file:
             self.results_json = json.load(file)
         self.test_header = load_test_header(self.results_json)
         self.test_results = [load_test_result(test) for test in self.results_json.get("tests", [])]
@@ -260,7 +305,7 @@ class MainWindow(QtWidgets.QMainWindow):
             print("No results file found")
             return
         
-        self.load_results(folder / "results.json")
+        self.load_json_results(folder / "results.json")
         self.cwd = Path(folder)
         QtCore.QDir.setCurrent(str(self.cwd))
         self.populate_tree_view()
