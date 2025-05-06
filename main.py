@@ -134,7 +134,7 @@ def open_directory_dialog(default_folder: Path=None) -> Path:
         folder = default_folder
     else:
         options = QtWidgets.QFileDialog.Options()
-        folder = QtWidgets.QFileDialog.getExistingDirectory(None, "Select Folder", "", options=options)
+        folder = QtWidgets.QFileDialog.getExistingDirectory(None, "Select folder with results", "", options=options)
     return Path(folder) if folder else None
 
 class TreeUserRole(Enum):
