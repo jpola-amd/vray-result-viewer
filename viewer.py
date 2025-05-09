@@ -104,9 +104,12 @@ class Ui_MainWindow(object):
         MainWindow.setStatusBar(self.statusbar)
         self.actionLoad = QtGui.QAction(MainWindow)
         self.actionLoad.setObjectName("actionLoad")
+        self.actionReport = QtGui.QAction(MainWindow)
+        self.actionReport.setObjectName("actionReport")
         self.actionExit = QtGui.QAction(MainWindow)
         self.actionExit.setObjectName("actionExit")
         self.menuFile.addAction(self.actionLoad)
+        self.menuFile.addAction(self.actionReport)
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionExit)
         self.menubar.addAction(self.menuFile.menuAction())
@@ -124,7 +127,11 @@ class Ui_MainWindow(object):
         self.groupBox_stats.setTitle(_translate("MainWindow", "Test Stats"))
         self.menuFile.setTitle(_translate("MainWindow", "File"))
         self.actionLoad.setText(_translate("MainWindow", "Load Results"))
+        self.actionLoad.setShortcut(_translate("MainWindow", "Ctrl+L"))
         self.actionExit.setText(_translate("MainWindow", "Exit"))
+        self.actionExit.setShortcut(_translate("MainWindow", "Ctrl+Q"))
+        self.actionReport.setText(_translate("MainWindow", "Report"))
+        self.actionReport.setShortcut(_translate("MainWindow", "Ctrl+R"))
 
 
 if __name__ == "__main__":

@@ -7,6 +7,10 @@ from datetime import datetime, timedelta
 import json
 from enum import Enum, auto
 
+import cv2
+from skimage.metrics import structural_similarity as ssim
+import numpy as np
+import pandas as pd
 
 @dataclass
 class RenderElement:
@@ -188,6 +192,123 @@ def setup_label_size_policy(label: QtWidgets.QLabel, size_policy: QtWidgets.QSiz
     label.setMinimumSize(10, 10)  # Small minimum size
     label.setScaledContents(True)
 
+
+
+
+class ProblemLevel(Enum):
+    GOOD = auto()
+    SOFT = auto()
+    HARD = auto()
+
+
+@dataclass
+class ReportEntry:
+    directory: str = ""
+    test: str = ""
+    element: str = ""
+    mse: float = 0
+    SSIM: float = 0
+    diff_percentage: float = 0
+    diff_count_pre_computed: int = 0
+    diff_count: int = 0
+    pixel_count: int = 0
+    problem_level: ProblemLevel = ProblemLevel.HARD
+    level : int = 0 # 20 levels every 5% of the diff count
+    message: str = ""
+
+
+
+@dataclass
+class Metrics:
+    total_pixels_count: int = 0
+    diff_pixels_count: int = 0
+    mse: float = 0
+    ssim: float = 0
+
+
+def ComputeMetrics(run_file : Path, ref_file : Path) -> Metrics | None:
+    # runfile and ref_file are Windows paths, check if it is a file and if it exists
+    ref_exists = ref_file.is_file() and ref_file.exists()
+    run_exists = run_file.is_file() and run_file.exists()
+    if not ref_exists or not run_exists:
+        print(f"Missing files: {run_file}, {ref_file}")
+        return None
+
+    run_image = cv2.imread(str(run_file), cv2.IMREAD_GRAYSCALE)
+    ref_image = cv2.imread(str(ref_file), cv2.IMREAD_GRAYSCALE)
+    if len(run_image) != len(run_image):
+        print(f"Image sizes do not match: {run_image.shape}, {ref_image.shape}")
+        return None
+    diff_image = cv2.absdiff(run_image, ref_image)
+
+    total_pixels = run_image.size
+    diff_pixels = np.count_nonzero(diff_image)
+    mse = np.mean((run_image - ref_image) ** 2)
+    ssim_value = ssim(run_image, ref_image)
+
+    return Metrics(total_pixels, diff_pixels, mse, ssim_value)
+
+
+def GenerateReport(root : QtGui.QStandardItem, limit: int = 0) -> list[ReportEntry]:
+    report = []
+    if limit == 0:
+        limit = root.rowCount()
+    
+    for row in range(limit):
+        child = root.child(row)
+        item_type = child.data(TreeUserRole.Type.value)
+        dir = child.data(TreeUserRole.Data.value)
+        
+        if item_type == TreeItemType.Directory.value:
+            print(f"There are {child.rowCount()}")
+            for row in range(child.rowCount()):
+                test_result = child.child(row)
+                test_item_type = test_result.data(TreeUserRole.Type.value)
+                test_data = test_result.data(TreeUserRole.Data.value)
+                if test_item_type == TreeItemType.TestResult.value:
+                    for name, elements in test_data.diff.items():
+                        for element in elements:
+                            metrics = ComputeMetrics(element.run_file, element.ref_file)
+                            if metrics:
+                                report_entry = ReportEntry(
+                                    directory=dir,
+                                    test=test_result.text(),
+                                    element=name,
+                                    mse=metrics.mse,
+                                    SSIM=metrics.ssim,
+                                    diff_percentage=(metrics.diff_pixels_count / metrics.total_pixels_count) * 100,
+                                    diff_count=metrics.diff_pixels_count,
+                                    diff_count_pre_computed=int(element.delta_count),
+                                    pixel_count=metrics.total_pixels_count,
+                                    problem_level=ProblemLevel.GOOD if metrics.ssim > 0.95 else ProblemLevel.SOFT,
+                                    level=int((metrics.diff_pixels_count / metrics.total_pixels_count) * 20),
+                                    message=element.status
+                                )
+                                report.append(report_entry)
+                            else:
+                                report_entry = ReportEntry(
+                                    directory=dir,
+                                    test=test_result.text(),
+                                    element=name,
+                                    mse=0,
+                                    SSIM=0,
+                                    diff_percentage=0,
+                                    diff_count=0,
+                                    diff_count_pre_computed=int(element.delta_count),
+                                    pixel_count=0,
+                                    problem_level=ProblemLevel.HARD,
+                                    level=20,
+                                    message="Rendering failed"
+                                )
+                                report.append(report_entry)
+
+                
+            
+    
+    return report
+
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
@@ -216,9 +337,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.results_json = None
         self.test_header = TestHeader()
         self.test_results = list[TestResult]
+        self.report = None
+        self.report_df = None
 
         self.ui.actionLoad.triggered.connect(self.load)
         self.ui.actionExit.triggered.connect(self.close)
+        self.ui.actionReport.triggered.connect(self.generate_report)
         
         self.ui.treeView_results.clicked.connect(self.on_tree_view_clicked)
         self.ui.horizontalSlider_frames.valueChanged.connect(self.on_slider_valueChanged)
@@ -358,7 +482,72 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proxy_model.setSourceModel(model)
         self.ui.treeView_results.setModel(self.proxy_model)
         self.ui.treeView_results.expandAll()
+
+    def generate_report(self):
+        if self.report:
+            print("Report already generated")
+            return
         
+        model = self.proxy_model.sourceModel()
+        root_item = model.invisibleRootItem()
+        self._report = GenerateReport(root_item, limit=0)
+
+        # convert to pandas dataframe
+      
+        self.report_df = pd.DataFrame([entry.__dict__ for entry in self._report])
+        # remove the rows with the directory == "emulation"
+        self.report_df = self.report_df[self.report_df["directory"] != "emulation"]
+
+        total_entries = len(self.report_df)
+        print(f"Total entries: {total_entries}")
+        print(self.report_df.describe())
+
+        passed_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.GOOD]
+        print(f"Passed tests: {len(passed_tests)}")
+        print(passed_tests)
+
+        soft_diff_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.SOFT]
+        print(f"Soft diff tests: {len(soft_diff_tests)}")
+        print(soft_diff_tests)
+
+        high_diff_tests = self.report_df[self.report_df['diff_percentage'] > 50]
+        print(f"High diff tests: {len(high_diff_tests)}")
+        print(high_diff_tests)
+
+        # ratio of failed tests to total tests
+        failed_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD]) / total_entries
+        print(f"Failed tests ratio: {failed_tests_ratio:.2%}")
+        # ratio of soft diff tests to total tests
+        soft_diff_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.SOFT]) / total_entries
+        print(f"Soft diff tests ratio: {soft_diff_tests_ratio:.2%}")
+        # ratio of passed tests to total tests
+        passed_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.GOOD]) / total_entries
+        print(f"Passed tests ratio: {passed_tests_ratio:.2%}")
+        # ratio of high diff tests to total tests
+        
+
+        failed_tests = self.report_df[self.report_df['problem_level'] == 'ProblemLevel.HARD']
+        print(f"Failed tests: {len(failed_tests)}")
+        print(failed_tests)
+
+        failed_tests_by_directory = self.report_df[self.report_df['problem_level'] == 'ProblemLevel.HARD'].groupby('directory').size()
+        print(f"Failed tests by directory: {len(failed_tests_by_directory)}")
+        print(failed_tests_by_directory)
+
+        top_mse_tests = self.report_df.nlargest(5, 'mse')
+        print(f"Top 5 tests by MSE: {len(top_mse_tests)}")        
+        print(top_mse_tests)
+
+
+        report_file = self.cwd / "report.csv"
+        self.report_df.to_csv(report_file, index=False)
+        print(f"Report saved to {report_file}")
+
+
+
+
+
+
     def close(self):
         print("Closing application")
         self.close()
