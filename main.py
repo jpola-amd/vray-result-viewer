@@ -317,6 +317,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setGeometry(100, 100, 800, 600)
         self.ui.setupUi(self)
         self.setWindowTitle("VRay Results Viewer")
+        self.ui.treeView_results.installEventFilter(self)
+        self.setAcceptDrops(True)
 
         # Set size policies for labels to allow them to shrink
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
@@ -340,14 +342,83 @@ class MainWindow(QtWidgets.QMainWindow):
         self.report = None
         self.report_df = None
 
+        self.temp_pixmap = None
+
         self.ui.actionLoad.triggered.connect(self.load)
         self.ui.actionExit.triggered.connect(self.close)
         self.ui.actionReport.triggered.connect(self.generate_report)
         
         self.ui.treeView_results.clicked.connect(self.on_tree_view_clicked)
+        
         self.ui.horizontalSlider_frames.valueChanged.connect(self.on_slider_valueChanged)
-        self.load(Path("D:/Vray/hip_output"))
+
+        if len(sys.argv) > 1:
+            # if there is a command line argument, use it as the folder to load
+            folder = Path(sys.argv[1])
+            if folder.is_dir():
+                self.load(folder)
+            else:
+                print(f"Invalid folder: {folder}")                
+        # else:
+        #     self.load(Path("D:/Vray/hip_output"))
     
+
+    def dragEnterEvent(self, event: QtGui.QDragEnterEvent):
+        """Accept drag events for folders and JSON files"""
+        if event.mimeData().hasUrls():
+            urls = event.mimeData().urls()
+            if urls:
+                file_path = Path(urls[0].toLocalFile())
+                # Accept if it's a directory or a JSON file
+                if file_path.is_dir() or (file_path.is_file() and file_path.suffix.lower() == '.json'):
+                    event.acceptProposedAction()
+
+    def dragMoveEvent(self, event: QtGui.QDragMoveEvent):
+        """Accept drag move events for folders and JSON files"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QtGui.QDropEvent):
+        """Handle drop events by loading the dropped folder or JSON file"""
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+
+        file_path = Path(urls[0].toLocalFile())
+        
+        if file_path.is_dir():
+            # If it's a folder, load it directly
+            self.load(file_path)
+        elif file_path.is_file() and file_path.suffix.lower() == '.json':
+            # If it's a JSON file, load it and set cwd to its directory
+            try:
+                self.cwd = file_path.parent
+                QtCore.QDir.setCurrent(str(self.cwd))
+                self.load_json_results(file_path)
+                self.populate_tree_view()
+            except Exception as e:
+                print(f"Error loading JSON file: {e}")
+        
+        event.acceptProposedAction()
+
+
+
+    
+    def swap_run_with_ref_pixmap(self):
+        # swap the run and ref pixmaps
+        run_pixmap = self.ui.label_resultImage.pixmap()
+        ref_pixmap = self.ui.label_referenceImage.pixmap()
+        self.ui.label_resultImage.setPixmap(ref_pixmap)
+        self.ui.label_referenceImage.setPixmap(run_pixmap)
+
+    def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if source == self.ui.treeView_results and event.type() == QtCore.QEvent.Type.KeyPress:
+            if event.key() == QtCore.Qt.Key.Key_Space:
+                # swap the run and ref pixmaps
+                self.swap_run_with_ref_pixmap()
+                return True
+        return super().eventFilter(source, event)
+
     def adjust_status_bar(self, min, max, step, value):
         self.ui.horizontalSlider_frames.setMinimum(min)
         self.ui.horizontalSlider_frames.setMaximum(max)
@@ -372,7 +443,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def load_image(self):
         render_element = self.current_render_elements[self.current_frame]
         self.ui.label_resultImage.setPixmap(create_pixmap_scaled(render_element.run_file, self.ui.label_resultImage.size()))
-        self.ui.label_referenceImage.setPixmap(create_pixmap_scaled(render_element.run_file, self.ui.label_referenceImage.size()))
+        self.ui.label_referenceImage.setPixmap(create_pixmap_scaled(render_element.ref_file, self.ui.label_referenceImage.size()))
         self.ui.label_diffImage.setPixmap(create_pixmap_scaled(render_element.delta_file, self.ui.label_diffImage.size()))
     
     def load_render_elements_info(self):
@@ -389,11 +460,30 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def handle_image_display(self, render_elements: list[RenderElement]):
         self.current_render_elements = render_elements
-        self.load_image()    
+        self.load_image()
+
+
+    def on_tree_selection_changed(self, selected, deselected):
+        for index in selected.indexes():
+            item = self.proxy_model.mapToSource(index)
+            if not item.isValid():
+                print("Invalid item selected")
+                return
+            type = item.data(TreeUserRole.Type.value)
+            if type == TreeItemType.RenderElement.value:
+                render_elements = item.data(TreeUserRole.Data.value)
+                self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
+                self.handle_image_display(render_elements)
+                self.handle_stats_display(render_elements)
+            elif type == TreeItemType.TestResult.value:
+                test_result = item.data(TreeUserRole.Data.value)
+                self.adjust_status_bar(0, len(test_result.diff)-1, 1, self.current_frame)
+                self.handle_stats_display(test_result)
 
     def on_tree_view_clicked(self, index: QtCore.QModelIndex):
         item = self.proxy_model.mapToSource(index)
         if not item.isValid():
+            print("Invalid item clicked")
             return
             
         type = item.data(TreeUserRole.Type.value)
@@ -401,18 +491,21 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if type == TreeItemType.TestResult.value:
             test_result = item.data(TreeUserRole.Data.value)
-            key = next(iter(test_result.diff.keys()))
-            print(f"Displaying: {key}")
-            render_elements = test_result.diff[key]
-            if render_elements:
-                self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
-                self.handle_image_display(render_elements)
+            # key = next(iter(test_result.diff.keys()))
+            # print(f"Displaying: {key}")
+            # render_elements = test_result.diff[key]
+            # if render_elements:
+            #     self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
+            #     self.handle_image_display(render_elements)
             self.handle_stats_display(test_result)
         elif type == TreeItemType.RenderElement.value:
             render_elements = item.data(TreeUserRole.Data.value)
             self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
             self.handle_image_display(render_elements)
             self.handle_stats_display(render_elements)
+        elif type == TreeItemType.Directory.value:
+            data = item.data(TreeUserRole.Data.value)
+            print(f"Directory clicked: {data}")
 
     def load_json_results(self, json_results_file):
         print(f"Loading results from {json_results_file}")
@@ -482,6 +575,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proxy_model.setSourceModel(model)
         self.ui.treeView_results.setModel(self.proxy_model)
         self.ui.treeView_results.expandAll()
+        self.ui.treeView_results.selectionModel().selectionChanged.connect(self.on_tree_selection_changed)
 
     def generate_report(self):
         if self.report:
@@ -545,7 +639,46 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 
-
+    def clear(self):
+        """Clear the current state of the application"""
+        print("Clearing application state")
+        
+        # Reset data models
+        self.results_json = None
+        self.test_header = TestHeader()
+        self.test_results = []
+        self.report = None
+        self.report_df = None
+        
+        # Clear current render elements
+        self.current_render_elements = None
+        self.current_frame = 0
+        
+        # Reset the UI elements
+        self.ui.label_resultImage.clear()
+        self.ui.label_referenceImage.clear()
+        self.ui.label_diffImage.clear()
+        
+        # Clear the tree view
+        model = QtGui.QStandardItemModel()
+        model.setHorizontalHeaderLabels(["Results"])
+        self.proxy_model.setSourceModel(model)
+        self.ui.treeView_results.setModel(self.proxy_model)
+        
+        # Clear the stats table
+        empty_model = QtGui.QStandardItemModel()
+        empty_model.setHorizontalHeaderLabels(["Field", "Value"])
+        set_table_model(self.ui.tableView_stats, empty_model)
+        
+        # Reset the status bar and slider
+        self.adjust_status_bar(0, 0, 1, 0)
+        
+        # Update the window title
+        self.setWindowTitle("VRay Results Viewer")
+        
+        # Reset working directory
+        self.cwd = Path.cwd()
+        QtCore.QDir.setCurrent(str(self.cwd))
 
 
     def close(self):
