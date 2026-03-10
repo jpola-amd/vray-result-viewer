@@ -1,16 +1,19 @@
-from viewer import Ui_MainWindow
-from PySide6 import QtCore, QtWidgets, QtGui
 from pathlib import Path
-
+import sys
+from enum import Enum, auto
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import json
-from enum import Enum, auto
 
 import cv2
 from skimage.metrics import structural_similarity as ssim
 import numpy as np
 import pandas as pd
+
+from PySide6 import QtCore, QtWidgets, QtGui
+from viewer import Ui_MainWindow
+
+
 
 @dataclass
 class RenderElement:
@@ -26,7 +29,7 @@ class RenderElement:
 
 @dataclass
 class TestDiff:
-    render_elements: list[RenderElement] = field(default_factory=list) 
+    render_elements: list[RenderElement] = field(default_factory=list)
 
 @dataclass
 class TestResult:
@@ -40,7 +43,9 @@ class TestResult:
     status: str = ""
     stats: dict = field(default_factory=dict)
     worker_index: int = 0
-    diff: dict = field(default_factory=dict) # dict of TestDiff objects mapping the name of the render element to the list of frames generated for this type of output
+    # dict of TestDiff objects mapping the name of the render
+    # element to the list of frames generated for this type of output
+    diff: dict = field(default_factory=dict)
 
 @dataclass
 class TestHeader:
@@ -77,7 +82,10 @@ def load_test_diff(json_data) -> dict:
     for diff_item in json_data:
         diff = TestDiff()
         frame = diff_item.get("frame", 0)
-        diff.render_elements = [load_render_element(element, frame) for element in diff_item.get("renderElements", [])]
+        diff.render_elements = [
+            load_render_element(element, frame)
+                for element in diff_item.get("renderElements", [])
+        ]
         diffs.append(diff)
 
     # create unique render elements by name
@@ -89,7 +97,7 @@ def load_test_diff(json_data) -> dict:
             render_elements[element.name].append(element)
 
     # sort render_elements by frame number
-    for name, elements in render_elements.items():
+    for _, elements in render_elements.items():
         elements.sort(key=lambda x: x.frame)
 
     return render_elements
@@ -111,7 +119,8 @@ def load_test_result(json_data) -> TestResult:
     result.diff = load_test_diff(json_data.get("diff", []))
 
     return result
-    
+
+
 def load_test_header(json_data) -> TestHeader:
     test_header = TestHeader()
     test_header.total_tests = json_data.get("allTestsCount", 0)
@@ -138,18 +147,20 @@ def open_directory_dialog(default_folder: Path=None) -> Path:
         folder = default_folder
     else:
         options = QtWidgets.QFileDialog.Options()
-        folder = QtWidgets.QFileDialog.getExistingDirectory(None, "Select folder with results", "", options=options)
+        folder = QtWidgets.QFileDialog.getExistingDirectory(
+            None, "Select folder with results", "", options=options
+            )
     return Path(folder) if folder else None
 
 class TreeUserRole(Enum):
-    Type = QtCore.Qt.UserRole
-    Data = QtCore.Qt.UserRole + 1
+    TYPE = QtCore.Qt.UserRole
+    DATA = QtCore.Qt.UserRole + 1
 
 
 class TreeItemType(Enum):
-    Directory = auto()
-    TestResult = auto()
-    RenderElement = auto()
+    DIRECTORY = auto()
+    TEST_RESULT = auto()
+    RENDER_ELEMENT = auto()
 
 def set_table_model(view, model):
     view.setModel(model)
@@ -157,35 +168,35 @@ def set_table_model(view, model):
     header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
 
 def create_render_elements_table_model(data : RenderElement):
-        model = QtGui.QStandardItemModel()
-        model.setHorizontalHeaderLabels(["Field", "Value"])
-        model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.name)])
-        model.appendRow([QtGui.QStandardItem("Frame"), QtGui.QStandardItem(str(data.frame))])
-        model.appendRow([QtGui.QStandardItem("Delta Count"), QtGui.QStandardItem(str(data.delta_count))])
-        model.appendRow([QtGui.QStandardItem("Delta File"), QtGui.QStandardItem(str(data.delta_file))])
-        model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
-        model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])        
-        return model
+    model = QtGui.QStandardItemModel()
+    model.setHorizontalHeaderLabels(["Field", "Value"])
+    model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.name)])
+    model.appendRow([QtGui.QStandardItem("Frame"), QtGui.QStandardItem(str(data.frame))])
+    model.appendRow([QtGui.QStandardItem("Delta Count"), QtGui.QStandardItem(str(data.delta_count))])
+    model.appendRow([QtGui.QStandardItem("Delta File"), QtGui.QStandardItem(str(data.delta_file))])
+    model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
+    model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])
+    return model
 
-def create_test_result_teable_model(data: TestResult):
-        model = QtGui.QStandardItemModel()
-        model.setHorizontalHeaderLabels(["Field", "Value"])
-        model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.file_name)])
-        model.appendRow([QtGui.QStandardItem("File Path"), QtGui.QStandardItem(str(data.file_path))])
-        model.appendRow([QtGui.QStandardItem("Log File"), QtGui.QStandardItem(str(data.log_file))])
-        model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])
-        model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
-        model.appendRow([QtGui.QStandardItem("Metric"), QtGui.QStandardItem(data.metric)])
-        model.appendRow([QtGui.QStandardItem("Worker Index"), QtGui.QStandardItem(str(data.worker_index))])
-        model.appendRow([QtGui.QStandardItem("Start Time"), QtGui.QStandardItem(data.start_time.strftime("%Y-%m-%d %H:%M:%S"))])
-        model.appendRow([QtGui.QStandardItem("End Time"), QtGui.QStandardItem(data.end_time.strftime("%Y-%m-%d %H:%M:%S"))])
-        model.appendRow([QtGui.QStandardItem("Duration"), QtGui.QStandardItem(str(data.end_time - data.start_time))])
-        return model
+def create_test_result_table_model(data: TestResult):
+    model = QtGui.QStandardItemModel()
+    model.setHorizontalHeaderLabels(["Field", "Value"])
+    model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.file_name)])
+    model.appendRow([QtGui.QStandardItem("File Path"), QtGui.QStandardItem(str(data.file_path))])
+    model.appendRow([QtGui.QStandardItem("Log File"), QtGui.QStandardItem(str(data.log_file))])
+    model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])
+    model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
+    model.appendRow([QtGui.QStandardItem("Metric"), QtGui.QStandardItem(data.metric)])
+    model.appendRow([QtGui.QStandardItem("Worker Index"), QtGui.QStandardItem(str(data.worker_index))])
+    model.appendRow([QtGui.QStandardItem("Start Time"), QtGui.QStandardItem(data.start_time.strftime("%Y-%m-%d %H:%M:%S"))])
+    model.appendRow([QtGui.QStandardItem("End Time"), QtGui.QStandardItem(data.end_time.strftime("%Y-%m-%d %H:%M:%S"))])
+    model.appendRow([QtGui.QStandardItem("Duration"), QtGui.QStandardItem(str(data.end_time - data.start_time))])
+    return model
 
 def create_pixmap_scaled(file, size):
-        if file:
-            return QtGui.QPixmap(str(file)).scaled(size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
-        return None
+    if file:
+        return QtGui.QPixmap(str(file)).scaled(size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+    return None
 
 def setup_label_size_policy(label: QtWidgets.QLabel, size_policy: QtWidgets.QSizePolicy):
     label.setSizePolicy(size_policy)
@@ -236,7 +247,7 @@ def ComputeMetrics(run_file : Path, ref_file : Path) -> Metrics | None:
 
     run_image = cv2.imread(str(run_file), cv2.IMREAD_GRAYSCALE)
     ref_image = cv2.imread(str(ref_file), cv2.IMREAD_GRAYSCALE)
-    if len(run_image) != len(run_image):
+    if run_image.shape != ref_image.shape:
         print(f"Image sizes do not match: {run_image.shape}, {ref_image.shape}")
         return None
     diff_image = cv2.absdiff(run_image, ref_image)
@@ -256,22 +267,22 @@ def GenerateReport(root : QtGui.QStandardItem, limit: int = 0) -> list[ReportEnt
     
     for row in range(limit):
         child = root.child(row)
-        item_type = child.data(TreeUserRole.Type.value)
-        dir = child.data(TreeUserRole.Data.value)
+        item_type = child.data(TreeUserRole.TYPE.value)
+        _dir = child.data(TreeUserRole.DATA.value)
         
-        if item_type == TreeItemType.Directory.value:
+        if item_type == TreeItemType.DIRECTORY.value:
             print(f"There are {child.rowCount()}")
-            for row in range(child.rowCount()):
-                test_result = child.child(row)
-                test_item_type = test_result.data(TreeUserRole.Type.value)
-                test_data = test_result.data(TreeUserRole.Data.value)
-                if test_item_type == TreeItemType.TestResult.value:
+            for inner_row in range(child.rowCount()):
+                test_result = child.child(inner_row)
+                test_item_type = test_result.data(TreeUserRole.TYPE.value)
+                test_data = test_result.data(TreeUserRole.DATA.value)
+                if test_item_type == TreeItemType.TEST_RESULT.value:
                     for name, elements in test_data.diff.items():
                         for element in elements:
                             metrics = ComputeMetrics(element.run_file, element.ref_file)
                             if metrics:
                                 report_entry = ReportEntry(
-                                    directory=dir,
+                                    directory=_dir,
                                     test=test_result.text(),
                                     element=name,
                                     mse=metrics.mse,
@@ -287,7 +298,7 @@ def GenerateReport(root : QtGui.QStandardItem, limit: int = 0) -> list[ReportEnt
                                 report.append(report_entry)
                             else:
                                 report_entry = ReportEntry(
-                                    directory=dir,
+                                    directory=_dir,
                                     test=test_result.text(),
                                     element=name,
                                     mse=0,
@@ -312,13 +323,13 @@ def GenerateReport(root : QtGui.QStandardItem, limit: int = 0) -> list[ReportEnt
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
-        self.ui = Ui_MainWindow()
+        self.ui = Ui_MainWindow(self)
         
         self.setGeometry(100, 100, 800, 600)
-        self.ui.setupUi(self)
         self.setWindowTitle("VRay Results Viewer")
         self.ui.treeView_results.installEventFilter(self)
         self.setAcceptDrops(True)
+
 
         # Set size policies for labels to allow them to shrink
         size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
@@ -338,9 +349,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # not actually required, but for clarity
         self.results_json = None
         self.test_header = TestHeader()
-        self.test_results = list[TestResult]
+        self.test_results: list[TestResult] = []
         self.report = None
         self.report_df = None
+        self._report = None
 
         self.temp_pixmap = None
 
@@ -361,7 +373,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 print(f"Invalid folder: {folder}")                
         # else:
         #     self.load(Path("D:/Vray/hip_output"))
-    
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent):
         """Accept drag events for folders and JSON files"""
@@ -396,9 +407,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtCore.QDir.setCurrent(str(self.cwd))
                 self.load_json_results(file_path)
                 self.populate_tree_view()
-            except Exception as e:
+            except IOError as e:
                 print(f"Error loading JSON file: {e}")
-        
         event.acceptProposedAction()
 
 
@@ -419,9 +429,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 return True
         return super().eventFilter(source, event)
 
-    def adjust_status_bar(self, min, max, step, value):
-        self.ui.horizontalSlider_frames.setMinimum(min)
-        self.ui.horizontalSlider_frames.setMaximum(max)
+    def adjust_status_bar(self, _min, _max, step, value):
+        self.ui.horizontalSlider_frames.setMinimum(_min)
+        self.ui.horizontalSlider_frames.setMaximum(_max)
         self.ui.horizontalSlider_frames.setSingleStep(step)
         self.ui.horizontalSlider_frames.setValue(value)
 
@@ -447,13 +457,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui.label_diffImage.setPixmap(create_pixmap_scaled(render_element.delta_file, self.ui.label_diffImage.size()))
     
     def load_render_elements_info(self):
-        redner_element = self.current_render_elements[self.current_frame]
-        model = create_render_elements_table_model(redner_element)
+        render_element = self.current_render_elements[self.current_frame]
+        model = create_render_elements_table_model(render_element)
         set_table_model(self.ui.tableView_stats, model)
   
     def handle_stats_display(self, data: TestResult | RenderElement):
         if isinstance(data, TestResult):
-            model = create_test_result_teable_model(data)
+            model = create_test_result_table_model(data)
         elif isinstance(data, list):
             model = create_render_elements_table_model(data[self.current_frame])
         set_table_model(self.ui.tableView_stats, model)
@@ -463,20 +473,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.load_image()
 
 
-    def on_tree_selection_changed(self, selected, deselected):
+    def on_tree_selection_changed(self, selected, _):
         for index in selected.indexes():
             item = self.proxy_model.mapToSource(index)
             if not item.isValid():
                 print("Invalid item selected")
                 return
-            type = item.data(TreeUserRole.Type.value)
-            if type == TreeItemType.RenderElement.value:
-                render_elements = item.data(TreeUserRole.Data.value)
+            item_type = item.data(TreeUserRole.TYPE.value)
+            if item_type == TreeItemType.RENDER_ELEMENT.value:
+                render_elements = item.data(TreeUserRole.DATA.value)
                 self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
                 self.handle_image_display(render_elements)
                 self.handle_stats_display(render_elements)
-            elif type == TreeItemType.TestResult.value:
-                test_result = item.data(TreeUserRole.Data.value)
+            elif item_type == TreeItemType.TEST_RESULT.value:
+                test_result = item.data(TreeUserRole.DATA.value)
                 self.adjust_status_bar(0, len(test_result.diff)-1, 1, self.current_frame)
                 self.handle_stats_display(test_result)
 
@@ -486,11 +496,11 @@ class MainWindow(QtWidgets.QMainWindow):
             print("Invalid item clicked")
             return
             
-        type = item.data(TreeUserRole.Type.value)
+        item_type = item.data(TreeUserRole.TYPE.value)
         self.current_frame = 0
 
-        if type == TreeItemType.TestResult.value:
-            test_result = item.data(TreeUserRole.Data.value)
+        if item_type == TreeItemType.TEST_RESULT.value:
+            test_result = item.data(TreeUserRole.DATA.value)
             # key = next(iter(test_result.diff.keys()))
             # print(f"Displaying: {key}")
             # render_elements = test_result.diff[key]
@@ -498,18 +508,18 @@ class MainWindow(QtWidgets.QMainWindow):
             #     self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
             #     self.handle_image_display(render_elements)
             self.handle_stats_display(test_result)
-        elif type == TreeItemType.RenderElement.value:
-            render_elements = item.data(TreeUserRole.Data.value)
+        elif item_type == TreeItemType.RENDER_ELEMENT.value:
+            render_elements = item.data(TreeUserRole.DATA.value)
             self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
             self.handle_image_display(render_elements)
             self.handle_stats_display(render_elements)
-        elif type == TreeItemType.Directory.value:
-            data = item.data(TreeUserRole.Data.value)
+        elif item_type == TreeItemType.DIRECTORY.value:
+            data = item.data(TreeUserRole.DATA.value)
             print(f"Directory clicked: {data}")
 
     def load_json_results(self, json_results_file):
         print(f"Loading results from {json_results_file}")
-        with open(json_results_file, 'r') as file:
+        with open(json_results_file, 'r', encoding='utf-8') as file:
             self.results_json = json.load(file)
         self.test_header = load_test_header(self.results_json)
         self.test_results = [load_test_result(test) for test in self.results_json.get("tests", [])]
@@ -541,16 +551,16 @@ class MainWindow(QtWidgets.QMainWindow):
             if directory not in directory_items:
                 directory_item = QtGui.QStandardItem(str(directory))
                 directory_items[directory] = directory_item
-                directory_item.setData(TreeItemType.Directory.value, TreeUserRole.Type.value)
-                directory_item.setData(directory, TreeUserRole.Data.value)
+                directory_item.setData(TreeItemType.DIRECTORY.value, TreeUserRole.TYPE.value)
+                directory_item.setData(directory, TreeUserRole.DATA.value)
                 model.appendRow(directory_item)
             else:
                 directory_item = directory_items[directory]
         
             test_item = QtGui.QStandardItem(test_result.file_name)
             test_item.setToolTip(f"Status: {test_result.status}\nMetric: {test_result.metric}\nExit Code: {test_result.exit_code}")
-            test_item.setData(TreeItemType.TestResult.value, TreeUserRole.Type.value)
-            test_item.setData(test_result, TreeUserRole.Data.value)
+            test_item.setData(TreeItemType.TEST_RESULT.value, TreeUserRole.TYPE.value)
+            test_item.setData(test_result, TreeUserRole.DATA.value)
             # check the test_result exit code if it is not 0, set the background color to red
             if test_result.exit_code != 0:
                 test_item.setBackground(QtGui.QBrush(QtGui.QColor(255, 0, 0, 100)))
@@ -562,8 +572,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 render_element = elements[0]
                 render_element_item = QtGui.QStandardItem(item_name)
                 render_element_item.setToolTip(f"Delta Count: {render_element.delta_count}\nStatus: {render_element.status}")
-                render_element_item.setData(TreeItemType.RenderElement.value, TreeUserRole.Type.value)
-                render_element_item.setData(elements, TreeUserRole.Data.value)
+                render_element_item.setData(TreeItemType.RENDER_ELEMENT.value, TreeUserRole.TYPE.value)
+                render_element_item.setData(elements, TreeUserRole.DATA.value)
                 if render_element.exit_code != 0:
                     render_element_item.setBackground(QtGui.QBrush(QtGui.QColor(255, 165, 0, 100)))
                 else:
@@ -585,6 +595,7 @@ class MainWindow(QtWidgets.QMainWindow):
         model = self.proxy_model.sourceModel()
         root_item = model.invisibleRootItem()
         self._report = GenerateReport(root_item, limit=0)
+        self.report = self._report
 
         # convert to pandas dataframe
       
@@ -620,11 +631,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # ratio of high diff tests to total tests
         
 
-        failed_tests = self.report_df[self.report_df['problem_level'] == 'ProblemLevel.HARD']
+        failed_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD]
         print(f"Failed tests: {len(failed_tests)}")
         print(failed_tests)
 
-        failed_tests_by_directory = self.report_df[self.report_df['problem_level'] == 'ProblemLevel.HARD'].groupby('directory').size()
+        failed_tests_by_directory = self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD].groupby('directory').size()
         print(f"Failed tests by directory: {len(failed_tests_by_directory)}")
         print(failed_tests_by_directory)
 
@@ -649,6 +660,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.test_results = []
         self.report = None
         self.report_df = None
+        self._report = None
         
         # Clear current render elements
         self.current_render_elements = None
@@ -683,11 +695,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def close(self):
         print("Closing application")
-        self.close()
+        super().close()
 
 if __name__ == "__main__":
-    import sys
-   
     app = QtWidgets.QApplication(sys.argv)
     main_window = MainWindow()
     main_window.show()

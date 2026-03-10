@@ -12,8 +12,12 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 
 class Ui_MainWindow(object):
-    def setupUi(self, MainWindow):
-        self.centralwidget = QtWidgets.QWidget(MainWindow)
+
+    def __init__(self, parent):
+        self.setupUi(parent)
+
+    def setupUi(self, parent):
+        self.centralwidget = QtWidgets.QWidget(parent)
         self.centralwidget.setObjectName("centralwidget")
         self.horizontalLayout = QtWidgets.QHBoxLayout(self.centralwidget)
         self.horizontalLayout.setObjectName("horizontalLayout")
@@ -92,21 +96,21 @@ class Ui_MainWindow(object):
         self.verticalLayout.setStretch(0, 3)
         self.horizontalLayout.addWidget(self.frame_results)
         self.horizontalLayout.setStretch(1, 2)
-        MainWindow.setCentralWidget(self.centralwidget)
-        self.menubar = QtWidgets.QMenuBar(MainWindow)
+        parent.setCentralWidget(self.centralwidget)
+        self.menubar = QtWidgets.QMenuBar(parent)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 800, 21))
         self.menubar.setObjectName("menubar")
         self.menuFile = QtWidgets.QMenu(self.menubar)
         self.menuFile.setObjectName("menuFile")
-        MainWindow.setMenuBar(self.menubar)
-        self.statusbar = QtWidgets.QStatusBar(MainWindow)
+        parent.setMenuBar(self.menubar)
+        self.statusbar = QtWidgets.QStatusBar(parent)
         self.statusbar.setObjectName("statusbar")
-        MainWindow.setStatusBar(self.statusbar)
-        self.actionLoad = QtGui.QAction(MainWindow)
+        parent.setStatusBar(self.statusbar)
+        self.actionLoad = QtGui.QAction(parent)
         self.actionLoad.setObjectName("actionLoad")
-        self.actionReport = QtGui.QAction(MainWindow)
+        self.actionReport = QtGui.QAction(parent)
         self.actionReport.setObjectName("actionReport")
-        self.actionExit = QtGui.QAction(MainWindow)
+        self.actionExit = QtGui.QAction(parent)
         self.actionExit.setObjectName("actionExit")
         self.menuFile.addAction(self.actionLoad)
         self.menuFile.addAction(self.actionReport)
@@ -114,12 +118,12 @@ class Ui_MainWindow(object):
         self.menuFile.addAction(self.actionExit)
         self.menubar.addAction(self.menuFile.menuAction())
 
-        self.retranslateUi(MainWindow)
-        QtCore.QMetaObject.connectSlotsByName(MainWindow)
+        self.retranslateUi(parent)
+        QtCore.QMetaObject.connectSlotsByName(parent)
 
-    def retranslateUi(self, MainWindow):
+    def retranslateUi(self, parent):
         _translate = QtCore.QCoreApplication.translate
-        MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow"))
+        parent.setWindowTitle(_translate("MainWindow", "MainWindow"))
         self.groupBox_treeView.setTitle(_translate("MainWindow", "Results"))
         self.groupBox_ref.setTitle(_translate("MainWindow", "Reference Image"))
         self.groupBox_run.setTitle(_translate("MainWindow", "Result Image"))
@@ -138,7 +142,7 @@ if __name__ == "__main__":
     import sys
     app = QtWidgets.QApplication(sys.argv)
     MainWindow = QtWidgets.QMainWindow()
-    ui = Ui_MainWindow()
-    ui.setupUi(MainWindow)
+    ui = Ui_MainWindow(MainWindow)
+    #ui.setupUi(MainWindow)
     MainWindow.show()
-    sys.exit(app.exec_())
+    sys.exit(app.exec())
