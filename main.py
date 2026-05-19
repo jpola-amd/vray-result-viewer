@@ -1,156 +1,25 @@
 from pathlib import Path
 import sys
 from enum import Enum, auto
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 import json
-
-import cv2
-from skimage.metrics import structural_similarity as ssim
-import numpy as np
-import pandas as pd
 
 from PySide6 import QtCore, QtWidgets, QtGui
 from viewer import Ui_MainWindow
+from models import RenderElement, TestResult, TestHeader, ProblemLevel
+from loaders import load_test_header, load_test_result
+from report import generate_report, report_to_dataframe, print_report_summary
 
 
-
-@dataclass
-class RenderElement:
-    frame : int = 0
-    name: str = ""
-    delta_count: int = 0
-    status: str = ""
-    exit_code: int = 0
-    ref_file: Path = None
-    ref_repro_file: Path = None
-    run_file: Path = None
-    delta_file: Path = None
-
-@dataclass
-class TestDiff:
-    render_elements: list[RenderElement] = field(default_factory=list)
-
-@dataclass
-class TestResult:
-    end_time: datetime = 0.0
-    start_time: datetime = 0.0
-    exit_code: int = 0
-    file_name: str = ""
-    file_path: Path = None
-    log_file: Path = None
-    metric : str = ""
-    status: str = ""
-    stats: dict = field(default_factory=dict)
-    worker_index: int = 0
-    # dict of TestDiff objects mapping the name of the render
-    # element to the list of frames generated for this type of output
-    diff: dict = field(default_factory=dict)
-
-@dataclass
-class TestHeader:
-    total_tests: int = 0
-    failed_tests: int = 0
-    labels: list = field(default_factory=list)
-    result_version: str = ""
-    stats_fields: dict = field(default_factory=lambda: {
-        "frameTime": { "label": "Frame Time", "dimension": "s"},
-        "fullFrameTime": { "label": "Full Frame Time", "dimension": "s"},
-        "totalTime": { "label": "Total Time", "dimension": "s"},
-    })
-    title: str = "Results"
-    update_ref_times : bool = False
-    version : dict = field(default_factory=dict)
-    duration: timedelta = field(default_factory=timedelta)
-
-def load_render_element(json_data, frame)-> RenderElement:
-    render_element = RenderElement()
-    render_element.frame = frame
-    render_element.name = json_data.get("name", "")
-    render_element.delta_count = json_data.get("deltaCount", 0)
-    render_element.status = json_data.get("status", "")
-    render_element.exit_code = json_data.get("exitCode", 0)
-    render_element.ref_file = Path(json_data.get("refFile", ""))
-    render_element.ref_repro_file = Path(json_data.get("refReproFile", ""))
-    render_element.run_file = Path(json_data.get("runFile", ""))
-    render_element.delta_file = Path(json_data.get("deltaFile", ""))
-    return render_element
-
-def load_test_diff(json_data) -> dict:
-    diffs = []
-
-    for diff_item in json_data:
-        diff = TestDiff()
-        frame = diff_item.get("frame", 0)
-        diff.render_elements = [
-            load_render_element(element, frame)
-                for element in diff_item.get("renderElements", [])
-        ]
-        diffs.append(diff)
-
-    # create unique render elements by name
-    render_elements = {}
-    for diff in diffs:
-        for element in diff.render_elements:
-            if element.name not in render_elements:
-                render_elements[element.name] = []
-            render_elements[element.name].append(element)
-
-    # sort render_elements by frame number
-    for _, elements in render_elements.items():
-        elements.sort(key=lambda x: x.frame)
-
-    return render_elements
-
-
-def load_test_result(json_data) -> TestResult:
-    result = TestResult()
-    result.end_time = datetime.fromtimestamp(json_data.get("endTime", 0.0))
-    result.start_time = datetime.fromtimestamp(json_data.get("startTime", 0.0))
-    result.exit_code = json_data.get("exitCode", 0)
-    result.file_name = json_data.get("fileName", "")
-    result.file_path = Path(json_data.get("file", ""))
-    result.log_file = Path(json_data.get("logFile", ""))
-    result.metric = json_data.get("metric", "")
-    result.status = json_data.get("status", "")
-    result.stats = json_data.get("stats", {})
-    result.worker_index = json_data.get("workerIndex", 0)
-    # result.diff = [load_test_diff(diff_item) for diff_item in json_data.get("diff", [])]
-    result.diff = load_test_diff(json_data.get("diff", []))
-
-    return result
-
-
-def load_test_header(json_data) -> TestHeader:
-    test_header = TestHeader()
-    test_header.total_tests = json_data.get("allTestsCount", 0)
-    test_header.failed_tests = json_data.get("failedTestsCount", 0)
-    test_header.labels = json_data.get("labels", [])
-    test_header.result_version = json_data.get("resultVersion", "3.0")
-    test_header.stats_fields = json_data.get("statsFields", {
-        "frameTime": { "label": "Frame Time", "dimension": "s"},
-        "fullFrameTime": { "label": "Full Frame Time", "dimension": "s"},
-        "totalTime": { "label": "Total Time", "dimension": "s"},
-    })
-    test_header.title = json_data.get("title", "Results")
-    test_header.update_ref_times = json_data.get("updateRefTimes", False)
-    test_header.version = json_data.get("version", {})
-    # duration conversion
-    duration_str = test_header.version.get("duration", "0:0:0")
-    hours, minutes, seconds = map(int, duration_str.split(":"))
-    test_header.duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
-    return test_header
-
-
-def open_directory_dialog(default_folder: Path=None) -> Path:
+def open_directory_dialog(default_folder: Path = None) -> Path:
     if default_folder:
         folder = default_folder
     else:
         options = QtWidgets.QFileDialog.Options()
         folder = QtWidgets.QFileDialog.getExistingDirectory(
             None, "Select folder with results", "", options=options
-            )
+        )
     return Path(folder) if folder else None
+
 
 class TreeUserRole(Enum):
     TYPE = QtCore.Qt.UserRole
@@ -162,12 +31,14 @@ class TreeItemType(Enum):
     TEST_RESULT = auto()
     RENDER_ELEMENT = auto()
 
+
 def set_table_model(view, model):
     view.setModel(model)
     header = view.horizontalHeader()
     header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
 
-def create_render_elements_table_model(data : RenderElement):
+
+def create_render_elements_table_model(data: RenderElement):
     model = QtGui.QStandardItemModel()
     model.setHorizontalHeaderLabels(["Field", "Value"])
     model.appendRow([QtGui.QStandardItem("Name"), QtGui.QStandardItem(data.name)])
@@ -177,6 +48,7 @@ def create_render_elements_table_model(data : RenderElement):
     model.appendRow([QtGui.QStandardItem("Status"), QtGui.QStandardItem(data.status)])
     model.appendRow([QtGui.QStandardItem("Exit Code"), QtGui.QStandardItem(str(data.exit_code))])
     return model
+
 
 def create_test_result_table_model(data: TestResult):
     model = QtGui.QStandardItemModel()
@@ -193,150 +65,41 @@ def create_test_result_table_model(data: TestResult):
     model.appendRow([QtGui.QStandardItem("Duration"), QtGui.QStandardItem(str(data.end_time - data.start_time))])
     return model
 
+
 def create_pixmap_scaled(file, size):
     if file:
-        return QtGui.QPixmap(str(file)).scaled(size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+        return QtGui.QPixmap(str(file)).scaled(
+            size,
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
     return None
+
 
 def setup_label_size_policy(label: QtWidgets.QLabel, size_policy: QtWidgets.QSizePolicy):
     label.setSizePolicy(size_policy)
-    label.setMinimumSize(10, 10)  # Small minimum size
-    label.setScaledContents(True)
-
-
-
-
-class ProblemLevel(Enum):
-    GOOD = auto()
-    SOFT = auto()
-    HARD = auto()
-
-
-@dataclass
-class ReportEntry:
-    directory: str = ""
-    test: str = ""
-    element: str = ""
-    mse: float = 0
-    SSIM: float = 0
-    diff_percentage: float = 0
-    diff_count_pre_computed: int = 0
-    diff_count: int = 0
-    pixel_count: int = 0
-    problem_level: ProblemLevel = ProblemLevel.HARD
-    level : int = 0 # 20 levels every 5% of the diff count
-    message: str = ""
-
-
-
-@dataclass
-class Metrics:
-    total_pixels_count: int = 0
-    diff_pixels_count: int = 0
-    mse: float = 0
-    ssim: float = 0
-
-
-def ComputeMetrics(run_file : Path, ref_file : Path) -> Metrics | None:
-    # runfile and ref_file are Windows paths, check if it is a file and if it exists
-    ref_exists = ref_file.is_file() and ref_file.exists()
-    run_exists = run_file.is_file() and run_file.exists()
-    if not ref_exists or not run_exists:
-        print(f"Missing files: {run_file}, {ref_file}")
-        return None
-
-    run_image = cv2.imread(str(run_file), cv2.IMREAD_GRAYSCALE)
-    ref_image = cv2.imread(str(ref_file), cv2.IMREAD_GRAYSCALE)
-    if run_image.shape != ref_image.shape:
-        print(f"Image sizes do not match: {run_image.shape}, {ref_image.shape}")
-        return None
-    diff_image = cv2.absdiff(run_image, ref_image)
-
-    total_pixels = run_image.size
-    diff_pixels = np.count_nonzero(diff_image)
-    mse = np.mean((run_image - ref_image) ** 2)
-    ssim_value = ssim(run_image, ref_image)
-
-    return Metrics(total_pixels, diff_pixels, mse, ssim_value)
-
-
-def GenerateReport(root : QtGui.QStandardItem, limit: int = 0) -> list[ReportEntry]:
-    report = []
-    if limit == 0:
-        limit = root.rowCount()
-    
-    for row in range(limit):
-        child = root.child(row)
-        item_type = child.data(TreeUserRole.TYPE.value)
-        _dir = child.data(TreeUserRole.DATA.value)
-        
-        if item_type == TreeItemType.DIRECTORY.value:
-            print(f"There are {child.rowCount()}")
-            for inner_row in range(child.rowCount()):
-                test_result = child.child(inner_row)
-                test_item_type = test_result.data(TreeUserRole.TYPE.value)
-                test_data = test_result.data(TreeUserRole.DATA.value)
-                if test_item_type == TreeItemType.TEST_RESULT.value:
-                    for name, elements in test_data.diff.items():
-                        for element in elements:
-                            metrics = ComputeMetrics(element.run_file, element.ref_file)
-                            if metrics:
-                                report_entry = ReportEntry(
-                                    directory=_dir,
-                                    test=test_result.text(),
-                                    element=name,
-                                    mse=metrics.mse,
-                                    SSIM=metrics.ssim,
-                                    diff_percentage=(metrics.diff_pixels_count / metrics.total_pixels_count) * 100,
-                                    diff_count=metrics.diff_pixels_count,
-                                    diff_count_pre_computed=int(element.delta_count),
-                                    pixel_count=metrics.total_pixels_count,
-                                    problem_level=ProblemLevel.GOOD if metrics.ssim > 0.95 else ProblemLevel.SOFT,
-                                    level=int((metrics.diff_pixels_count / metrics.total_pixels_count) * 20),
-                                    message=element.status
-                                )
-                                report.append(report_entry)
-                            else:
-                                report_entry = ReportEntry(
-                                    directory=_dir,
-                                    test=test_result.text(),
-                                    element=name,
-                                    mse=0,
-                                    SSIM=0,
-                                    diff_percentage=0,
-                                    diff_count=0,
-                                    diff_count_pre_computed=int(element.delta_count),
-                                    pixel_count=0,
-                                    problem_level=ProblemLevel.HARD,
-                                    level=20,
-                                    message="Rendering failed"
-                                )
-                                report.append(report_entry)
-
-                
-            
-    
-    return report
-
+    label.setMinimumSize(10, 10)
 
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
         self.ui = Ui_MainWindow(self)
-        
+
         self.setGeometry(100, 100, 800, 600)
         self.setWindowTitle("VRay Results Viewer")
         self.ui.treeView_results.installEventFilter(self)
         self.setAcceptDrops(True)
 
-
         # Set size policies for labels to allow them to shrink
-        size_policy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.Preferred, QtWidgets.QSizePolicy.Policy.Preferred)
+        size_policy = QtWidgets.QSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         setup_label_size_policy(self.ui.label_resultImage, size_policy)
         setup_label_size_policy(self.ui.label_diffImage, size_policy)
         setup_label_size_policy(self.ui.label_referenceImage, size_policy)
-        
+
         self.current_frame = 0
         self.current_render_elements = None
 
@@ -344,78 +107,64 @@ class MainWindow(QtWidgets.QMainWindow):
         self.proxy_model = QtCore.QSortFilterProxyModel(self)
         self.proxy_model.setFilterCaseSensitivity(QtCore.Qt.CaseInsensitive)
         self.ui.lineEdit_searchBar.textChanged.connect(self.proxy_model.setFilterFixedString)
-    
+
         self.cwd = Path.cwd()
-        # not actually required, but for clarity
         self.results_json = None
         self.test_header = TestHeader()
         self.test_results: list[TestResult] = []
         self.report = None
         self.report_df = None
-        self._report = None
-
-        self.temp_pixmap = None
 
         self.ui.actionLoad.triggered.connect(self.load)
         self.ui.actionExit.triggered.connect(self.close)
         self.ui.actionReport.triggered.connect(self.generate_report)
-        
+
         self.ui.treeView_results.clicked.connect(self.on_tree_view_clicked)
-        
         self.ui.horizontalSlider_frames.valueChanged.connect(self.on_slider_valueChanged)
 
         if len(sys.argv) > 1:
-            # if there is a command line argument, use it as the folder to load
             folder = Path(sys.argv[1])
             if folder.is_dir():
                 self.load(folder)
             else:
-                print(f"Invalid folder: {folder}")                
-        # else:
-        #     self.load(Path("D:/Vray/hip_output"))
+                print(f"Invalid folder: {folder}")
+
+    # --- Drag & Drop ---
 
     def dragEnterEvent(self, event: QtGui.QDragEnterEvent):
-        """Accept drag events for folders and JSON files"""
         if event.mimeData().hasUrls():
             urls = event.mimeData().urls()
             if urls:
                 file_path = Path(urls[0].toLocalFile())
-                # Accept if it's a directory or a JSON file
                 if file_path.is_dir() or (file_path.is_file() and file_path.suffix.lower() == '.json'):
                     event.acceptProposedAction()
 
     def dragMoveEvent(self, event: QtGui.QDragMoveEvent):
-        """Accept drag move events for folders and JSON files"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event: QtGui.QDropEvent):
-        """Handle drop events by loading the dropped folder or JSON file"""
         urls = event.mimeData().urls()
         if not urls:
             return
 
         file_path = Path(urls[0].toLocalFile())
-        
+
         if file_path.is_dir():
-            # If it's a folder, load it directly
             self.load(file_path)
         elif file_path.is_file() and file_path.suffix.lower() == '.json':
-            # If it's a JSON file, load it and set cwd to its directory
             try:
                 self.cwd = file_path.parent
                 QtCore.QDir.setCurrent(str(self.cwd))
-                self.load_json_results(file_path)
-                self.populate_tree_view()
-            except IOError as e:
+                if self.load_json_results(file_path):
+                    self.populate_tree_view()
+            except (IOError, json.JSONDecodeError, ValueError) as e:
                 print(f"Error loading JSON file: {e}")
         event.acceptProposedAction()
 
+    # --- Event Handling ---
 
-
-    
     def swap_run_with_ref_pixmap(self):
-        # swap the run and ref pixmaps
         run_pixmap = self.ui.label_resultImage.pixmap()
         ref_pixmap = self.ui.label_referenceImage.pixmap()
         self.ui.label_resultImage.setPixmap(ref_pixmap)
@@ -424,22 +173,23 @@ class MainWindow(QtWidgets.QMainWindow):
     def eventFilter(self, source: QtCore.QObject, event: QtCore.QEvent) -> bool:
         if source == self.ui.treeView_results and event.type() == QtCore.QEvent.Type.KeyPress:
             if event.key() == QtCore.Qt.Key.Key_Space:
-                # swap the run and ref pixmaps
                 self.swap_run_with_ref_pixmap()
                 return True
         return super().eventFilter(source, event)
 
     def adjust_status_bar(self, _min, _max, step, value):
+        self.ui.horizontalSlider_frames.blockSignals(True)
         self.ui.horizontalSlider_frames.setMinimum(_min)
         self.ui.horizontalSlider_frames.setMaximum(_max)
         self.ui.horizontalSlider_frames.setSingleStep(step)
         self.ui.horizontalSlider_frames.setValue(value)
+        self.ui.horizontalSlider_frames.blockSignals(False)
 
     def resizeEvent(self, event: QtCore.QEvent):
         if hasattr(self, "current_render_elements") and self.current_render_elements:
             self.load_image()
         super().resizeEvent(event)
-    
+
     def on_slider_valueChanged(self, value: int):
         self.current_frame = value
         if not self.current_render_elements:
@@ -449,29 +199,34 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.load_image()
         self.load_render_elements_info()
-    
+
+    # --- Image Display ---
+
     def load_image(self):
         render_element = self.current_render_elements[self.current_frame]
         self.ui.label_resultImage.setPixmap(create_pixmap_scaled(render_element.run_file, self.ui.label_resultImage.size()))
         self.ui.label_referenceImage.setPixmap(create_pixmap_scaled(render_element.ref_file, self.ui.label_referenceImage.size()))
         self.ui.label_diffImage.setPixmap(create_pixmap_scaled(render_element.delta_file, self.ui.label_diffImage.size()))
-    
+
     def load_render_elements_info(self):
         render_element = self.current_render_elements[self.current_frame]
         model = create_render_elements_table_model(render_element)
         set_table_model(self.ui.tableView_stats, model)
-  
+
     def handle_stats_display(self, data: TestResult | RenderElement):
         if isinstance(data, TestResult):
             model = create_test_result_table_model(data)
         elif isinstance(data, list):
             model = create_render_elements_table_model(data[self.current_frame])
+        else:
+            return
         set_table_model(self.ui.tableView_stats, model)
 
     def handle_image_display(self, render_elements: list[RenderElement]):
         self.current_render_elements = render_elements
         self.load_image()
 
+    # --- Tree View ---
 
     def on_tree_selection_changed(self, selected, _):
         for index in selected.indexes():
@@ -482,12 +237,12 @@ class MainWindow(QtWidgets.QMainWindow):
             item_type = item.data(TreeUserRole.TYPE.value)
             if item_type == TreeItemType.RENDER_ELEMENT.value:
                 render_elements = item.data(TreeUserRole.DATA.value)
-                self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
+                self.adjust_status_bar(0, len(render_elements) - 1, 1, self.current_frame)
                 self.handle_image_display(render_elements)
                 self.handle_stats_display(render_elements)
             elif item_type == TreeItemType.TEST_RESULT.value:
                 test_result = item.data(TreeUserRole.DATA.value)
-                self.adjust_status_bar(0, len(test_result.diff)-1, 1, self.current_frame)
+                self.adjust_status_bar(0, len(test_result.diff) - 1, 1, self.current_frame)
                 self.handle_stats_display(test_result)
 
     def on_tree_view_clicked(self, index: QtCore.QModelIndex):
@@ -495,58 +250,59 @@ class MainWindow(QtWidgets.QMainWindow):
         if not item.isValid():
             print("Invalid item clicked")
             return
-            
+
         item_type = item.data(TreeUserRole.TYPE.value)
         self.current_frame = 0
 
         if item_type == TreeItemType.TEST_RESULT.value:
             test_result = item.data(TreeUserRole.DATA.value)
-            # key = next(iter(test_result.diff.keys()))
-            # print(f"Displaying: {key}")
-            # render_elements = test_result.diff[key]
-            # if render_elements:
-            #     self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
-            #     self.handle_image_display(render_elements)
             self.handle_stats_display(test_result)
         elif item_type == TreeItemType.RENDER_ELEMENT.value:
             render_elements = item.data(TreeUserRole.DATA.value)
-            self.adjust_status_bar(0, len(render_elements)-1, 1, self.current_frame)
+            self.adjust_status_bar(0, len(render_elements) - 1, 1, self.current_frame)
             self.handle_image_display(render_elements)
             self.handle_stats_display(render_elements)
         elif item_type == TreeItemType.DIRECTORY.value:
             data = item.data(TreeUserRole.DATA.value)
             print(f"Directory clicked: {data}")
 
+    # --- Data Loading ---
+
     def load_json_results(self, json_results_file):
         print(f"Loading results from {json_results_file}")
-        with open(json_results_file, 'r', encoding='utf-8') as file:
-            self.results_json = json.load(file)
+        try:
+            with open(json_results_file, 'r', encoding='utf-8') as file:
+                self.results_json = json.load(file)
+        except (IOError, json.JSONDecodeError) as e:
+            print(f"Error reading results file: {e}")
+            return False
         self.test_header = load_test_header(self.results_json)
         self.test_results = [load_test_result(test) for test in self.results_json.get("tests", [])]
         print(f"Loaded {len(self.test_results)} test results")
+        return True
 
-    def load(self, default_folder: Path=None):
+    def load(self, default_folder: Path = None):
         print("Loading results")
         folder = default_folder if default_folder else open_directory_dialog()
         if not folder:
             print("No results file found")
             return
-        
-        self.load_json_results(folder / "results.json")
+
+        if not self.load_json_results(folder / "results.json"):
+            return
         self.cwd = Path(folder)
         QtCore.QDir.setCurrent(str(self.cwd))
         self.populate_tree_view()
 
     def populate_tree_view(self):
         print("Populating tree view")
-       
+
         model = QtGui.QStandardItemModel()
         model.setHorizontalHeaderLabels(["Results"])
 
         directory_items = {}
 
         for test_result in self.test_results:
-            # Create a new item for each test result
             directory = test_result.file_path.parent
             if directory not in directory_items:
                 directory_item = QtGui.QStandardItem(str(directory))
@@ -556,17 +312,15 @@ class MainWindow(QtWidgets.QMainWindow):
                 model.appendRow(directory_item)
             else:
                 directory_item = directory_items[directory]
-        
+
             test_item = QtGui.QStandardItem(test_result.file_name)
             test_item.setToolTip(f"Status: {test_result.status}\nMetric: {test_result.metric}\nExit Code: {test_result.exit_code}")
             test_item.setData(TreeItemType.TEST_RESULT.value, TreeUserRole.TYPE.value)
             test_item.setData(test_result, TreeUserRole.DATA.value)
-            # check the test_result exit code if it is not 0, set the background color to red
             if test_result.exit_code != 0:
                 test_item.setBackground(QtGui.QBrush(QtGui.QColor(255, 0, 0, 100)))
 
-            # check the test_result diff for the render elements
-            for name, elements  in test_result.diff.items():
+            for name, elements in test_result.diff.items():
                 n_frames = len(elements)
                 item_name = name if n_frames == 1 else f"{name} (x{n_frames})"
                 render_element = elements[0]
@@ -579,127 +333,69 @@ class MainWindow(QtWidgets.QMainWindow):
                 else:
                     render_element_item.setBackground(QtGui.QBrush(QtGui.QColor(0, 255, 0, 100)))
                 test_item.appendRow(render_element_item)
-                    
+
             directory_item.appendRow(test_item)
-        
+
         self.proxy_model.setSourceModel(model)
         self.ui.treeView_results.setModel(self.proxy_model)
         self.ui.treeView_results.expandAll()
         self.ui.treeView_results.selectionModel().selectionChanged.connect(self.on_tree_selection_changed)
 
+    # --- Report ---
+
     def generate_report(self):
         if self.report:
             print("Report already generated")
             return
-        
-        model = self.proxy_model.sourceModel()
-        root_item = model.invisibleRootItem()
-        self._report = GenerateReport(root_item, limit=0)
-        self.report = self._report
 
-        # convert to pandas dataframe
-      
-        self.report_df = pd.DataFrame([entry.__dict__ for entry in self._report])
-        # remove the rows with the directory == "emulation"
-        self.report_df = self.report_df[self.report_df["directory"] != "emulation"]
-
-        total_entries = len(self.report_df)
-        print(f"Total entries: {total_entries}")
-        print(self.report_df.describe())
-
-        passed_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.GOOD]
-        print(f"Passed tests: {len(passed_tests)}")
-        print(passed_tests)
-
-        soft_diff_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.SOFT]
-        print(f"Soft diff tests: {len(soft_diff_tests)}")
-        print(soft_diff_tests)
-
-        high_diff_tests = self.report_df[self.report_df['diff_percentage'] > 50]
-        print(f"High diff tests: {len(high_diff_tests)}")
-        print(high_diff_tests)
-
-        # ratio of failed tests to total tests
-        failed_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD]) / total_entries
-        print(f"Failed tests ratio: {failed_tests_ratio:.2%}")
-        # ratio of soft diff tests to total tests
-        soft_diff_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.SOFT]) / total_entries
-        print(f"Soft diff tests ratio: {soft_diff_tests_ratio:.2%}")
-        # ratio of passed tests to total tests
-        passed_tests_ratio = len(self.report_df[self.report_df['problem_level'] == ProblemLevel.GOOD]) / total_entries
-        print(f"Passed tests ratio: {passed_tests_ratio:.2%}")
-        # ratio of high diff tests to total tests
-        
-
-        failed_tests = self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD]
-        print(f"Failed tests: {len(failed_tests)}")
-        print(failed_tests)
-
-        failed_tests_by_directory = self.report_df[self.report_df['problem_level'] == ProblemLevel.HARD].groupby('directory').size()
-        print(f"Failed tests by directory: {len(failed_tests_by_directory)}")
-        print(failed_tests_by_directory)
-
-        top_mse_tests = self.report_df.nlargest(5, 'mse')
-        print(f"Top 5 tests by MSE: {len(top_mse_tests)}")        
-        print(top_mse_tests)
-
+        self.report = generate_report(self.test_results)
+        self.report_df = report_to_dataframe(self.report)
+        print_report_summary(self.report_df)
 
         report_file = self.cwd / "report.csv"
         self.report_df.to_csv(report_file, index=False)
         print(f"Report saved to {report_file}")
 
-
+    # --- Clear / Close ---
 
     def clear(self):
-        """Clear the current state of the application"""
         print("Clearing application state")
-        
-        # Reset data models
+
         self.results_json = None
         self.test_header = TestHeader()
         self.test_results = []
         self.report = None
         self.report_df = None
-        self._report = None
-        
-        # Clear current render elements
+
         self.current_render_elements = None
         self.current_frame = 0
-        
-        # Reset the UI elements
+
         self.ui.label_resultImage.clear()
         self.ui.label_referenceImage.clear()
         self.ui.label_diffImage.clear()
-        
-        # Clear the tree view
+
         model = QtGui.QStandardItemModel()
         model.setHorizontalHeaderLabels(["Results"])
         self.proxy_model.setSourceModel(model)
         self.ui.treeView_results.setModel(self.proxy_model)
-        
-        # Clear the stats table
+
         empty_model = QtGui.QStandardItemModel()
         empty_model.setHorizontalHeaderLabels(["Field", "Value"])
         set_table_model(self.ui.tableView_stats, empty_model)
-        
-        # Reset the status bar and slider
+
         self.adjust_status_bar(0, 0, 1, 0)
-        
-        # Update the window title
         self.setWindowTitle("VRay Results Viewer")
-        
-        # Reset working directory
+
         self.cwd = Path.cwd()
         QtCore.QDir.setCurrent(str(self.cwd))
-
 
     def close(self):
         print("Closing application")
         super().close()
+
 
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
     main_window = MainWindow()
     main_window.show()
     sys.exit(app.exec())
-
