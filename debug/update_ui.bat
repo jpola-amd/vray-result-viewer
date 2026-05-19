@@ -1,0 +1,1 @@
+pyuic5.exe -x .\viewer.ui -o viewer2.py
